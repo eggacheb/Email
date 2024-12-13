@@ -120,16 +120,26 @@ def check_email(email):
         print(f"[API] 邮件列表: {emails}")
         
         if 'messageData' in emails and emails['messageData']:
-            # 过滤掉AI TOOLS的邮件
+            # 过滤掉AI TOOLS的邮件，并按时间排序
             valid_emails = [
                 e for e in emails['messageData'] 
                 if e['from'] != 'AI TOOLS'
             ]
             
-            if valid_emails:
-                # 获取最新的非AI TOOLS邮件
-                latest_email = valid_emails[0]
-                print(f"[API] 发现新邮件: {latest_email}")
+            # 优先选择'Just Now'的邮件
+            just_now_emails = [
+                e for e in valid_emails 
+                if e['time'] == 'Just Now'
+            ]
+            
+            if just_now_emails:
+                # 如果有多个Just Now的邮件，取最新的一个（通常messageID较大的更新）
+                latest_email = sorted(
+                    just_now_emails, 
+                    key=lambda x: x['messageID'], 
+                    reverse=True
+                )[0]
+                print(f"[API] 发现最新邮件: {latest_email}")
                 
                 try:
                     message_content = gmail.load_item(latest_email['messageID'])
@@ -150,7 +160,7 @@ def check_email(email):
                 print(f"[API] 返回数据: {response_data}")
                 return jsonify(response_data)
             else:
-                print(f"[API] 没有找到有效的新邮件")
+                print(f"[API] 没有找到最新邮件")
         
         return jsonify({
             'success': True,
