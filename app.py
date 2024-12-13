@@ -1,115 +1,73 @@
-from flask import Flask, jsonify
-from temp_gmail import GMail
-import time
-import json
-from datetime import datetime, timedelta
+const EMAIL_SERVICE_API = 'https://email-orpin.vercel.app';
+const EMAIL_CHECK_INTERVAL = 5000; // 5ç§’æ£€æŸ¥ä¸€æ¬¡
+const MAX_EMAIL_CHECK_ATTEMPTS = 12; // æœ€å¤šæ£€æŸ¥1åˆ†é’Ÿ
 
-app = Flask(__name__)
+function encodeEmailForUrl(email) {
+  const [localPart, domain] = email.split('@');
+  return `${encodeURIComponent(localPart)}@${encodeURIComponent(domain)}`;
+}
 
-# Ê¹ÓÃ¼òµ¥µÄÄÚ´æ»º´æ(Éú²ú»·¾³½¨ÒéÊ¹ÓÃRedis)
-class EmailCache:
-    def __init__(self):
-        self.cache = {}
+async function getVerificationCode(username, domain) {
+  try {
+    console.log('[Email] å¼€å§‹åˆ›å»ºä¸´æ—¶é‚®ç®±');
+    // åˆ›å»ºä¸´æ—¶é‚®ç®±
+    const createResponse = await fetch(`${EMAIL_SERVICE_API}/create_email`);
+    const createData = await createResponse.json();
+    
+    if (!createData.success) {
+      console.error('[Email] åˆ›å»ºé‚®ç®±å¤±è´¥:', createData.error);
+      throw new Error('Failed to create email');
+    }
+    
+    const email = createData.email;
+    console.log(`[Email] æˆåŠŸåˆ›å»ºä¸´æ—¶é‚®ç®±: ${email}`);
+    
+    // å¾ªç¯æ£€æŸ¥æ–°é‚®ä»¶
+    console.log('[Email] å¼€å§‹ç­‰å¾…éªŒè¯é‚®ä»¶');
+    for (let attempt = 0; attempt < MAX_EMAIL_CHECK_ATTEMPTS; attempt++) {
+      console.log(`[Email] ç¬¬${attempt + 1}æ¬¡æ£€æŸ¥é‚®ä»¶`);
+      
+      // ä½¿ç”¨æ–°çš„ç¼–ç å‡½æ•°å¤„ç†é‚®ç®±åœ°å€
+      const encodedEmail = encodeEmailForUrl(email);
+      const checkResponse = await fetch(`${EMAIL_SERVICE_API}/check_email/${encodedEmail}`);
+      const checkData = await checkResponse.json();
+      
+      if (checkData.success && checkData.has_new) {
+        console.log('[Email] æ”¶åˆ°æ–°é‚®ä»¶:', {
+          from: checkData.from,
+          subject: checkData.subject,
+          time: checkData.time
+        });
         
-    def add(self, email, gmail):
-        # ÉèÖÃ1Ğ¡Ê±¹ıÆÚ
-        self.cache[email] = {
-            'instance': gmail,
-            'expires': datetime.now() + timedelta(hours=1)
+        // ä»é‚®ä»¶å†…å®¹ä¸­æå–éªŒè¯ç 
+        const codeMatch = checkData.message.match(/<strong>([a-z0-9]+)<\/strong>/i);
+        if (codeMatch) {
+          const code = codeMatch[1];
+          console.log(`[Email] æˆåŠŸæå–éªŒè¯ç : ${code}`);
+          return code;
         }
-        
-    def get(self, email):
-        if email in self.cache:
-            data = self.cache[email]
-            if datetime.now() < data['expires']:
-                return data['instance']
-            else:
-                del self.cache[email]
-        return None
-        
-    def cleanup(self):
-        now = datetime.now()
-        expired = [k for k, v in self.cache.items() if now >= v['expires']]
-        for k in expired:
-            del self.cache[k]
+      }
+      
+      // ç­‰å¾…ä¸‹æ¬¡æ£€æŸ¥
+      await new Promise(resolve => setTimeout(resolve, EMAIL_CHECK_INTERVAL));
+    }
+    
+    console.error('[Email] è¶…æ—¶æœªæ”¶åˆ°éªŒè¯ç ');
+    throw new Error('æœªèƒ½è·å–éªŒè¯ç ');
+  } catch (error) {
+    console.error('[Email] è·å–éªŒè¯ç å¤±è´¥:', error);
+    throw error;
+  }
+}
 
-email_cache = EmailCache()
-
-@app.route('/')
-def home():
-    return jsonify({
-        'status': 'ok',
-        'message': 'Temp Gmail Service is running'
-    })
-
-@app.route('/create_email', methods=['GET'])
-def create_email():
-    try:
-        # ÇåÀí¹ıÆÚµÄÓÊÏäÊµÀı
-        email_cache.cleanup()
-        
-        # ´´½¨ĞÂµÄGmailÊµÀı
-        gmail = GMail()
-        email = gmail.create_email()
-        
-        # ±£´æÊµÀıµ½»º´æ
-        email_cache.add(email, gmail)
-        
-        return jsonify({
-            'success': True,
-            'email': email
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-@app.route('/check_email/<path:email>', methods=['GET'])
-def check_email(email):
-    try:
-        # ´Ó»º´æ»ñÈ¡GmailÊµÀı
-        gmail = email_cache.get(email)
-        if not gmail:
-            return jsonify({
-                'success': False,
-                'error': 'Email not found or expired'
-            }), 404
-            
-        emails = gmail.load_list()
-        
-        # Èç¹ûÓĞĞÂÓÊ¼ş,»ñÈ¡×îĞÂÒ»·âµÄÄÚÈİ
-        if 'messageData' in emails and emails['messageData']:
-            latest_email = emails['messageData'][0]
-            message_content = gmail.load_item(latest_email['messageID'])
-            
-            return jsonify({
-                'success': True,
-                'has_new': True,
-                'message': message_content,
-                'subject': latest_email.get('subject', ''),
-                'from': latest_email.get('from', ''),
-                'time': latest_email.get('time', '')
-            })
-        
-        return jsonify({
-            'success': True,
-            'has_new': False
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-# Ìí¼Ó½¡¿µ¼ì²é½Ó¿Ú
-@app.route('/health')
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'cache_size': len(email_cache.cache)
-    })
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000) 
+// æ·»åŠ å¥åº·æ£€æŸ¥å‡½æ•°
+async function checkEmailServiceHealth() {
+  try {
+    const response = await fetch(`${EMAIL_SERVICE_API}/health`);
+    const data = await response.json();
+    return data.status === 'healthy';
+  } catch (error) {
+    console.error('[Health] é‚®ä»¶æœåŠ¡å¥åº·æ£€æŸ¥å¤±è´¥:', error);
+    return false;
+  }
+}
