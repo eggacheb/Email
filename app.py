@@ -64,18 +64,29 @@ def create_email():
         # 清理过期的邮箱实例
         email_cache.cleanup()
         
-        # 创建新的Gmail实例
-        gmail = GMail()
-        email = gmail.create_email()
-        print(f"[API] 创建新邮箱: {email}")
+        # 最多尝试5次创建邮箱
+        for attempt in range(5):
+            # 创建新的Gmail实例
+            gmail = GMail()
+            email = gmail.create_email()
+            print(f"[API] 尝试创建邮箱 (第{attempt + 1}次): {email}")
+            
+            # 检查邮箱格式，不要带"+"的邮箱
+            if '+' not in email:
+                print(f"[API] 成功创建合适的邮箱: {email}")
+                # 保存实例到缓存
+                email_cache.add(email, gmail)
+                return jsonify({
+                    'success': True,
+                    'email': email
+                })
+            else:
+                print(f"[API] 跳过不合适的邮箱格式: {email}")
+                continue
         
-        # 保存实例到缓存
-        email_cache.add(email, gmail)
+        # 如果多次尝试都失败
+        raise Exception("无法创建合适格式的邮箱")
         
-        return jsonify({
-            'success': True,
-            'email': email
-        })
     except Exception as e:
         print(f"[Error] 创建邮箱失败: {str(e)}")
         return jsonify({
