@@ -100,24 +100,38 @@ def check_email(email):
         print(f"[API] 邮件列表: {emails}")
         
         if 'messageData' in emails and emails['messageData']:
-            latest_email = emails['messageData'][0]
-            print(f"[API] 发现新邮件: {latest_email}")
-            message_content = gmail.load_item(latest_email['messageID'])
-            print(f"[API] 邮件内容: {message_content}")
+            # 过滤掉AI TOOLS的邮件
+            valid_emails = [
+                e for e in emails['messageData'] 
+                if e['from'] != 'AI TOOLS'
+            ]
             
-            response_data = {
-                'success': True,
-                'has_new': True,
-                'message': message_content,
-                'subject': latest_email.get('subject', ''),
-                'from': latest_email.get('from', ''),
-                'time': latest_email.get('time', ''),
-                'raw_email': latest_email
-            }
-            print(f"[API] 返回数据: {response_data}")
-            return jsonify(response_data)
+            if valid_emails:
+                # 获取最新的非AI TOOLS邮件
+                latest_email = valid_emails[0]
+                print(f"[API] 发现新邮件: {latest_email}")
+                
+                try:
+                    message_content = gmail.load_item(latest_email['messageID'])
+                    print(f"[API] 邮件内容: {message_content}")
+                except Exception as e:
+                    print(f"[API] 获取邮件内容失败: {str(e)}")
+                    message_content = "Failed to load message content"
+                
+                response_data = {
+                    'success': True,
+                    'has_new': True,
+                    'message': message_content,
+                    'subject': latest_email.get('subject', ''),
+                    'from': latest_email.get('from', ''),
+                    'time': latest_email.get('time', ''),
+                    'raw_email': latest_email
+                }
+                print(f"[API] 返回数据: {response_data}")
+                return jsonify(response_data)
+            else:
+                print(f"[API] 没有找到有效的新邮件")
         
-        print(f"[API] 没有新邮件: {email}")
         return jsonify({
             'success': True,
             'has_new': False
