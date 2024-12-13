@@ -1,73 +1,144 @@
-const EMAIL_SERVICE_API = 'https://email-orpin.vercel.app';
-const EMAIL_CHECK_INTERVAL = 5000; // 5秒检查一次
-const MAX_EMAIL_CHECK_ATTEMPTS = 12; // 最多检查1分钟
+from flask import Flask, jsonify
+from temp_gmail import GMail
+import time
+import json
+from datetime import datetime, timedelta
 
-function encodeEmailForUrl(email) {
-  const [localPart, domain] = email.split('@');
-  return `${encodeURIComponent(localPart)}@${encodeURIComponent(domain)}`;
-}
+app = Flask(__name__)
 
-async function getVerificationCode(username, domain) {
-  try {
-    console.log('[Email] 开始创建临时邮箱');
-    // 创建临时邮箱
-    const createResponse = await fetch(`${EMAIL_SERVICE_API}/create_email`);
-    const createData = await createResponse.json();
-    
-    if (!createData.success) {
-      console.error('[Email] 创建邮箱失败:', createData.error);
-      throw new Error('Failed to create email');
-    }
-    
-    const email = createData.email;
-    console.log(`[Email] 成功创建临时邮箱: ${email}`);
-    
-    // 循环检查新邮件
-    console.log('[Email] 开始等待验证邮件');
-    for (let attempt = 0; attempt < MAX_EMAIL_CHECK_ATTEMPTS; attempt++) {
-      console.log(`[Email] 第${attempt + 1}次检查邮件`);
-      
-      // 使用新的编码函数处理邮箱地址
-      const encodedEmail = encodeEmailForUrl(email);
-      const checkResponse = await fetch(`${EMAIL_SERVICE_API}/check_email/${encodedEmail}`);
-      const checkData = await checkResponse.json();
-      
-      if (checkData.success && checkData.has_new) {
-        console.log('[Email] 收到新邮件:', {
-          from: checkData.from,
-          subject: checkData.subject,
-          time: checkData.time
-        });
+# 使用简单的内存缓存(生产环境建议使用Redis)
+class EmailCache:
+    def __init__(self):
+        self.cache = {}
         
-        // 从邮件内容中提取验证码
-        const codeMatch = checkData.message.match(/<strong>([a-z0-9]+)<\/strong>/i);
-        if (codeMatch) {
-          const code = codeMatch[1];
-          console.log(`[Email] 成功提取验证码: ${code}`);
-          return code;
+    def normalize_email(self, email):
+        """规范化邮箱地址，保持点分隔的格式"""
+        # 移除空白字符但保留点
+        email = email.lower().strip()
+        # 确保@前的点保持不变
+        local_part, domain = email.split('@')
+        return f"{local_part}@{domain}"
+        
+    def add(self, email, gmail):
+        email = self.normalize_email(email)
+        self.cache[email] = {
+            'instance': gmail,
+            'expires': datetime.now() + timedelta(hours=1)
         }
-      }
-      
-      // 等待下次检查
-      await new Promise(resolve => setTimeout(resolve, EMAIL_CHECK_INTERVAL));
-    }
-    
-    console.error('[Email] 超时未收到验证码');
-    throw new Error('未能获取验证码');
-  } catch (error) {
-    console.error('[Email] 获取验证码失败:', error);
-    throw error;
-  }
-}
+        print(f"[Cache] 添加邮箱实例: {email}")
+        
+    def get(self, email):
+        email = self.normalize_email(email)
+        if email in self.cache:
+            data = self.cache[email]
+            if datetime.now() < data['expires']:
+                print(f"[Cache] 找到邮箱实例: {email}")
+                return data['instance']
+            else:
+                print(f"[Cache] 邮箱实例已过期: {email}")
+                del self.cache[email]
+        else:
+            print(f"[Cache] 未找到邮箱实例: {email}")
+        return None
+        
+    def cleanup(self):
+        now = datetime.now()
+        expired = [k for k, v in self.cache.items() if now >= v['expires']]
+        for k in expired:
+            print(f"[Cache] 清理过期实例: {k}")
+            del self.cache[k]
 
-// 添加健康检查函数
-async function checkEmailServiceHealth() {
-  try {
-    const response = await fetch(`${EMAIL_SERVICE_API}/health`);
-    const data = await response.json();
-    return data.status === 'healthy';
-  } catch (error) {
-    console.error('[Health] 邮件服务健康检查失败:', error);
-    return false;
-  }
-}
+email_cache = EmailCache()
+
+@app.route('/')
+def home():
+    return jsonify({
+        'status': 'ok',
+        'message': 'Temp Gmail Service is running',
+        'cache_size': len(email_cache.cache)
+    })
+
+@app.route('/create_email', methods=['GET'])
+def create_email():
+    try:
+        # 清理过期的邮箱实例
+        email_cache.cleanup()
+        
+        # 创建新的Gmail实例
+        gmail = GMail()
+        email = gmail.create_email()
+        print(f"[API] 创建新邮箱: {email}")
+        
+        # 保存实例到缓存
+        email_cache.add(email, gmail)
+        
+        return jsonify({
+            'success': True,
+            'email': email
+        })
+    except Exception as e:
+        print(f"[Error] 创建邮箱失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/check_email/<path:email>', methods=['GET'])
+def check_email(email):
+    try:
+        print(f"[API] 检查邮箱: {email}")
+        # 从缓存获取Gmail实例
+        gmail = email_cache.get(email)
+        if not gmail:
+            print(f"[API] 邮箱不存在或已过期: {email}")
+            return jsonify({
+                'success': False,
+                'error': 'Email not found or expired'
+            }), 404
+            
+        print(f"[API] 加载邮件列表: {email}")
+        emails = gmail.load_list()
+        
+        # 如果有新邮件,获取最新一封的内容
+        if 'messageData' in emails and emails['messageData']:
+            latest_email = emails['messageData'][0]
+            print(f"[API] 发现新邮件: {latest_email.get('subject', 'No Subject')}")
+            message_content = gmail.load_item(latest_email['messageID'])
+            
+            return jsonify({
+                'success': True,
+                'has_new': True,
+                'message': message_content,
+                'subject': latest_email.get('subject', ''),
+                'from': latest_email.get('from', ''),
+                'time': latest_email.get('time', '')
+            })
+        
+        print(f"[API] 没有新邮件: {email}")
+        return jsonify({
+            'success': True,
+            'has_new': False
+        })
+        
+    except Exception as e:
+        print(f"[Error] 检查邮件失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# 添加健康检查接口
+@app.route('/health')
+def health_check():
+    cache_info = {
+        'size': len(email_cache.cache),
+        'emails': list(email_cache.cache.keys())
+    }
+    print(f"[Health] 缓存状态: {cache_info}")
+    return jsonify({
+        'status': 'healthy',
+        'cache': cache_info
+    })
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000) 
