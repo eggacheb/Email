@@ -87,7 +87,6 @@ def create_email():
 def check_email(email):
     try:
         print(f"[API] 检查邮箱: {email}")
-        # 从缓存获取Gmail实例
         gmail = email_cache.get(email)
         if not gmail:
             print(f"[API] 邮箱不存在或已过期: {email}")
@@ -98,21 +97,25 @@ def check_email(email):
             
         print(f"[API] 加载邮件列表: {email}")
         emails = gmail.load_list()
+        print(f"[API] 邮件列表: {emails}")
         
-        # 如果有新邮件,获取最新一封的内容
         if 'messageData' in emails and emails['messageData']:
             latest_email = emails['messageData'][0]
-            print(f"[API] 发现新邮件: {latest_email.get('subject', 'No Subject')}")
+            print(f"[API] 发现新邮件: {latest_email}")
             message_content = gmail.load_item(latest_email['messageID'])
+            print(f"[API] 邮件内容: {message_content}")
             
-            return jsonify({
+            response_data = {
                 'success': True,
                 'has_new': True,
                 'message': message_content,
                 'subject': latest_email.get('subject', ''),
                 'from': latest_email.get('from', ''),
-                'time': latest_email.get('time', '')
-            })
+                'time': latest_email.get('time', ''),
+                'raw_email': latest_email
+            }
+            print(f"[API] 返回数据: {response_data}")
+            return jsonify(response_data)
         
         print(f"[API] 没有新邮件: {email}")
         return jsonify({
