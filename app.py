@@ -120,22 +120,22 @@ def check_email(email):
         print(f"[API] 邮件列表: {emails}")
         
         if 'messageData' in emails and emails['messageData']:
-            # 过滤掉AI TOOLS的邮件，并按时间排序
+            # 过滤掉AI TOOLS的邮件
             valid_emails = [
                 e for e in emails['messageData'] 
                 if e['from'] != 'AI TOOLS'
             ]
             
-            # 优先选择'Just Now'的邮件
-            just_now_emails = [
+            # 获取最新邮件（Just Now 或 one minute ago）
+            newest_emails = [
                 e for e in valid_emails 
-                if e['time'] == 'Just Now'
+                if e['time'] in ['Just Now', 'one minute ago']
             ]
             
-            if just_now_emails:
-                # 如果有多个Just Now的邮件，取最新的一个（通常messageID较大的更新）
+            if newest_emails:
+                # 如果有多个新邮件，按messageID排序取最新的
                 latest_email = sorted(
-                    just_now_emails, 
+                    newest_emails, 
                     key=lambda x: x['messageID'], 
                     reverse=True
                 )[0]
