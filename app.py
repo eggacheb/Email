@@ -3,7 +3,6 @@ from temp_gmail import GMail
 import time
 import json
 from datetime import datetime, timedelta
-from urllib.parse import unquote
 
 app = Flask(__name__)
 
@@ -13,12 +12,12 @@ class EmailCache:
         self.cache = {}
         
     def normalize_email(self, email):
-        """规范化邮箱地址，处理URL编码和特殊字符"""
-        # 先进行URL解码
-        email = unquote(email)
-        # 移除空白字符但保留点和加号
+        """规范化邮箱地址，保持点分隔的格式"""
+        # 移除空白字符但保留点
         email = email.lower().strip()
-        return email
+        # 确保@前的点保持不变
+        local_part, domain = email.split('@')
+        return f"{local_part}@{domain}"
         
     def add(self, email, gmail):
         email = self.normalize_email(email)
@@ -30,9 +29,6 @@ class EmailCache:
         
     def get(self, email):
         email = self.normalize_email(email)
-        print(f"[Cache] 尝试获取邮箱实例: {email}")
-        print(f"[Cache] 当前缓存中的邮箱: {list(self.cache.keys())}")
-        
         if email in self.cache:
             data = self.cache[email]
             if datetime.now() < data['expires']:
@@ -90,19 +86,16 @@ def create_email():
 @app.route('/check_email/<path:email>', methods=['GET'])
 def check_email(email):
     try:
-        print(f"[API] 检查邮箱(原始): {email}")
-        decoded_email = unquote(email)
-        print(f"[API] 检查邮箱(解码后): {decoded_email}")
-        
-        gmail = email_cache.get(decoded_email)
+        print(f"[API] 检查邮箱: {email}")
+        gmail = email_cache.get(email)
         if not gmail:
-            print(f"[API] 邮箱不存在或已过期: {decoded_email}")
+            print(f"[API] 邮箱不存在或已过期: {email}")
             return jsonify({
                 'success': False,
                 'error': 'Email not found or expired'
             }), 404
             
-        print(f"[API] 加载邮件列表: {decoded_email}")
+        print(f"[API] 加载邮件列表: {email}")
         emails = gmail.load_list()
         print(f"[API] 邮件列表: {emails}")
         
